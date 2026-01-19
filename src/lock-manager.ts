@@ -17,6 +17,18 @@ import {
 /** Default lock file path */
 export const DEFAULT_LOCK_FILE = join(homedir(), "brew.lock");
 
+/**
+ * Get the lock file path, checking the BREWLOCK environment variable first.
+ * Falls back to DEFAULT_LOCK_FILE if not set.
+ */
+export function getLockFilePath(): string {
+  const envPath = process.env.BREWLOCK;
+  if (envPath) {
+    return envPath;
+  }
+  return DEFAULT_LOCK_FILE;
+}
+
 /** Lock file format version */
 const LOCK_VERSION = 1;
 

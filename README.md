@@ -20,7 +20,7 @@
 ### Homebrew (recommended)
 
 ```bash
-brew tap shipworthyai/brewlock
+brew tap shipworthyai/brewlock https://github.com/ShipWorthyAI/brewlock.git
 brew install brewlock
 ```
 
@@ -66,7 +66,7 @@ After adding the alias, restart your shell or run `source ~/.zshrc` (or equivale
 
 ```bash
 # Install brewlock
-brew tap shipworthyai/brewlock
+brew tap shipworthyai/brewlock https://github.com/ShipWorthyAI/brewlock.git
 brew install brewlock
 
 # Set up the alias (add to your ~/.zshrc)
@@ -111,7 +111,11 @@ brew bundle install    # Installs from brew.lock with version checking
 ### Syncing Across Machines
 
 ```bash
-# On your main machine: commit your brew.lock to your dotfiles
+# Option 1: Point BREWLOCK directly to your dotfiles (recommended)
+# Add to your shell config (~/.zshrc or ~/.bashrc):
+export BREWLOCK="$HOME/dotfiles/brew.lock"
+
+# Option 2: Copy (or symlink) the lock file to your dotfiles
 cp ~/brew.lock ~/dotfiles/
 cd ~/dotfiles && git add brew.lock && git commit -m "Update brew.lock"
 
@@ -122,7 +126,17 @@ brew bundle install
 
 ## The `brew.lock` File
 
-The lock file is stored at `~/brew.lock` (in your home directory) and uses standard Brewfile syntax with added version information:
+By default, the lock file is stored at `~/brew.lock` (in your home directory). You can customize this location using the `BREWLOCK` environment variable:
+
+```bash
+# Set a custom lock file path
+export BREWLOCK=/path/to/your/brew.lock
+
+# Example: Store in your dotfiles repo
+export BREWLOCK="$HOME/dotfiles/brew.lock"
+```
+
+The lock file uses standard Brewfile syntax with added version information:
 
 ```ruby
 # brewlock v1

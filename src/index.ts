@@ -11,8 +11,8 @@ import { bundleInstall } from "./bundle-install.ts";
 import { executeBrewCommandStreaming } from "./executor.ts";
 import {
   checkLockFile,
-  DEFAULT_LOCK_FILE,
   generateLockFile,
+  getLockFilePath,
   readLockFile,
   removeEntry,
   upsertEntry,
@@ -28,6 +28,7 @@ export {
   checkLockFile,
   DEFAULT_LOCK_FILE,
   generateLockFile,
+  getLockFilePath,
   parseLockFile,
   readLockFile,
   removeEntry,
@@ -97,6 +98,10 @@ EXAMPLES:
   brewlock check             Verify installed versions match brew.lock
   brewlock bundle install    Install from Brewfile using version constraints
 
+ENVIRONMENT VARIABLES:
+  BREWLOCK     Path to the lock file (default: ~/brew.lock)
+               Example: export BREWLOCK=/path/to/your/brew.lock
+
 FILES:
   brew.lock    Lock file in Brewfile format with version information
 `);
@@ -108,10 +113,11 @@ FILES:
 async function handleLock(): Promise<void> {
   console.log("Generating brew.lock from installed packages...");
 
+  const lockFilePath = getLockFilePath();
   const lockFile = await generateLockFile();
-  await writeLockFile(lockFile, DEFAULT_LOCK_FILE);
+  await writeLockFile(lockFile, lockFilePath);
 
-  console.log(`\nGenerated ${DEFAULT_LOCK_FILE} with:`);
+  console.log(`\nGenerated ${lockFilePath} with:`);
   console.log(
     `  - ${lockFile.entries.filter((e) => e.type === "tap").length} taps`
   );
@@ -132,7 +138,7 @@ async function handleLock(): Promise<void> {
 async function handleCheck(): Promise<void> {
   console.log("Checking installed packages against brew.lock...");
 
-  const result = await checkLockFile(DEFAULT_LOCK_FILE);
+  const result = await checkLockFile(getLockFilePath());
 
   if (result.matches) {
     console.log("\n✓ All installed packages match brew.lock");
@@ -155,7 +161,8 @@ async function updateLockFile(
   packages: string[],
   isCask: boolean
 ): Promise<void> {
-  let lockFile = await readLockFile(DEFAULT_LOCK_FILE);
+  const lockFilePath = getLockFilePath();
+  let lockFile = await readLockFile(lockFilePath);
   const type: PackageType = isCask ? "cask" : "brew";
 
   if (
@@ -203,7 +210,7 @@ async function updateLockFile(
     }
   }
 
-  await writeLockFile(lockFile, DEFAULT_LOCK_FILE);
+  await writeLockFile(lockFile, lockFilePath);
 }
 
 /**
@@ -215,7 +222,7 @@ async function handleBundleInstall(): Promise<boolean> {
   );
 
   const success = await bundleInstall({
-    lockFilePath: DEFAULT_LOCK_FILE,
+    lockFilePath: getLockFilePath(),
     verbose: true,
   });
 
