@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { LockEntry, LockFile } from "../src/types.ts";
+import type { LockFile } from "../src/types.ts";
 import {
   addMockResponse,
   mockExecuteBrewCommand,
@@ -25,7 +25,7 @@ const {
   serializeLockFile,
   readLockFile,
   writeLockFile,
-  upsertEntry,
+  upsertBrew,
   generateLockFile,
   checkLockFile,
 } = await import("../src/lock-manager.ts");
@@ -101,7 +101,9 @@ describe("End-to-end workflow", () => {
 
     // 3. Read back
     const readBack = await readLockFile(TEST_LOCK_FILE);
-    expect(readBack.entries.length).toBe(lockFile.entries.length);
+    expect(Object.keys(readBack.brew).length).toBe(
+      Object.keys(lockFile.brew).length
+    );
 
     // 4. Check should match
     const checkResult = await checkLockFile(TEST_LOCK_FILE);
@@ -124,27 +126,24 @@ describe("End-to-end workflow", () => {
     let lockFile = await readLockFile(TEST_LOCK_FILE);
 
     if (version) {
-      const entry: LockEntry = {
-        type: "brew",
-        name: "git",
-        version,
-      };
-      lockFile = upsertEntry(lockFile, entry);
+      lockFile = upsertBrew(lockFile, "git", { version });
       await writeLockFile(lockFile, TEST_LOCK_FILE);
 
       // Verify
       const readBack = await readLockFile(TEST_LOCK_FILE);
-      const gitEntry = readBack.entries.find(
-        (e) => e.type === "brew" && e.name === "git"
-      );
-      expect(gitEntry?.version).toBe(version);
+      expect(readBack.brew.git?.version).toBe(version);
     }
   });
 
   it("bundle install from lock file", async () => {
     // Create a minimal lock file
-    const content = `# brewlock v1
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     // Run bundle install
@@ -208,65 +207,63 @@ describe("Lock file format compatibility", () => {
     }
   });
 
-  it("generated lock file is valid Brewfile syntax", async () => {
+  it("generated lock file is valid JSON", async () => {
     const lockFile = await generateLockFile();
     const serialized = serializeLockFile(lockFile);
 
-    // Should start with header comment
-    expect(serialized.startsWith("# brewlock v1")).toBe(true);
+    // Should be valid JSON
+    expect(() => JSON.parse(serialized)).not.toThrow();
 
-    // Each non-comment, non-empty line should be valid syntax
-    const lines = serialized.split("\n");
-    for (const line of lines) {
-      if (line.trim() && !line.startsWith("#")) {
-        // Should match: type "name"[, key: value]*
-        expect(line).toMatch(/^(tap|brew|cask|mas)\s+"[^"]+"/);
-      }
-    }
+    // Should have required fields
+    const parsed = JSON.parse(serialized);
+    expect(parsed).toHaveProperty("version");
+    expect(parsed).toHaveProperty("tap");
+    expect(parsed).toHaveProperty("brew");
+    expect(parsed).toHaveProperty("cask");
+    expect(parsed).toHaveProperty("mas");
   });
 
-  it("can parse standard Brewfile format", async () => {
-    // Standard Brewfile without versions (for compatibility)
-    const content = `
-tap "homebrew/cask"
-tap "homebrew/bundle"
-
-brew "git"
-brew "node"
-
-cask "visual-studio-code"
-`;
+  it("can parse JSONC format with comments", async () => {
+    // JSONC with comments
+    const content = `{
+  // This is a comment
+  "version": 1,
+  "tap": {
+    "homebrew/cask": {},
+    "homebrew/bundle": {}
+  },
+  "brew": {
+    "git": { "version": "2.43.0" },
+    "node": { "version": "21.5.0" }
+  },
+  "cask": {
+    "visual-studio-code": { "version": "1.85.1" }
+  },
+  "mas": {}
+}`;
     const lockFile = parseLockFile(content);
 
-    expect(lockFile.entries.length).toBe(5);
-    expect(lockFile.entries.filter((e) => e.type === "tap").length).toBe(2);
-    expect(lockFile.entries.filter((e) => e.type === "brew").length).toBe(2);
-    expect(lockFile.entries.filter((e) => e.type === "cask").length).toBe(1);
+    expect(Object.keys(lockFile.tap)).toHaveLength(2);
+    expect(Object.keys(lockFile.brew)).toHaveLength(2);
+    expect(Object.keys(lockFile.cask)).toHaveLength(1);
   });
 
   it("preserves version information in roundtrip", async () => {
     const original: LockFile = {
       version: 1,
-      entries: [
-        { type: "tap", name: "homebrew/cask" },
-        { type: "brew", name: "git", version: "2.43.0" },
-        { type: "brew", name: "openssl@3", version: "3.2.0_1" },
-        { type: "cask", name: "docker", version: "4.26.1" },
-        { type: "mas", name: "Xcode", id: 497799835, version: "15.2" },
-      ],
+      tap: { "homebrew/cask": { commit: "abc123" } },
+      brew: {
+        git: { version: "2.43.0" },
+        "openssl@3": { version: "3.2.0_1" },
+      },
+      cask: { docker: { version: "4.26.1" } },
+      mas: { Xcode: { id: 497799835, version: "15.2" } },
     };
 
     const serialized = serializeLockFile(original);
     const parsed = parseLockFile(serialized);
 
-    expect(parsed.entries.length).toBe(original.entries.length);
-
-    for (let i = 0; i < original.entries.length; i++) {
-      expect(parsed.entries[i]?.type).toBe(original.entries[i]?.type);
-      expect(parsed.entries[i]?.name).toBe(original.entries[i]?.name);
-      expect(parsed.entries[i]?.version).toBe(original.entries[i]?.version);
-      expect(parsed.entries[i]?.id).toBe(original.entries[i]?.id);
-    }
+    expect(parsed).toEqual(original);
   });
 });
 
@@ -296,24 +293,26 @@ describe("Error handling", () => {
   });
 
   it("handles malformed lock file gracefully", async () => {
-    const content = `
-this is not valid
-neither is this
-tap "homebrew/cask"
-more invalid stuff
-brew "git", version: "2.43.0"
-`;
+    const content = "this is not valid JSON at all";
     await writeFile(TEST_LOCK_FILE, content);
 
-    // Should still parse valid entries
+    // Should return empty lock file for malformed content
     const lockFile = await readLockFile(TEST_LOCK_FILE);
-    expect(lockFile.entries.length).toBe(2);
+    expect(lockFile.version).toBe(1);
+    expect(Object.keys(lockFile.tap)).toHaveLength(0);
+    expect(Object.keys(lockFile.brew)).toHaveLength(0);
   });
 
   it("handles version mismatch in check", async () => {
-    const content = `# brewlock v1
-brew "git", version: "0.0.0-definitely-wrong"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "0.0.0-definitely-wrong" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const result = await checkLockFile(TEST_LOCK_FILE);
@@ -345,18 +344,17 @@ describe("Cask handling", () => {
   it("differentiates brew and cask in lock file", async () => {
     const lockFile: LockFile = {
       version: 1,
-      entries: [
-        { type: "brew", name: "docker", version: "24.0.0" }, // docker CLI
-        { type: "cask", name: "docker", version: "4.26.1" }, // Docker Desktop
-      ],
+      tap: {},
+      brew: { docker: { version: "24.0.0" } }, // docker CLI
+      cask: { docker: { version: "4.26.1" } }, // Docker Desktop
+      mas: {},
     };
 
     const serialized = serializeLockFile(lockFile);
-    expect(serialized).toContain('brew "docker"');
-    expect(serialized).toContain('cask "docker"');
-
     const parsed = parseLockFile(serialized);
-    expect(parsed.entries.filter((e) => e.name === "docker").length).toBe(2);
+
+    expect(parsed.brew.docker?.version).toBe("24.0.0");
+    expect(parsed.cask.docker?.version).toBe("4.26.1");
   });
 });
 
@@ -385,15 +383,42 @@ describe("Tap handling", () => {
     expect(listTaps.modifiesPackages).toBe(false);
   });
 
-  it("taps have no version in lock file", async () => {
+  it("taps can have commit in lock file", async () => {
     const lockFile: LockFile = {
       version: 1,
-      entries: [{ type: "tap", name: "homebrew/cask" }],
+      tap: { "homebrew/cask": { commit: "abc123def456" } },
+      brew: {},
+      cask: {},
+      mas: {},
     };
 
     const serialized = serializeLockFile(lockFile);
-    expect(serialized).toContain('tap "homebrew/cask"');
-    expect(serialized).not.toContain("version");
+    const parsed = parseLockFile(serialized);
+
+    expect(parsed.tap["homebrew/cask"]?.commit).toBe("abc123def456");
+  });
+
+  it("taps can have URL for custom repos", async () => {
+    const lockFile: LockFile = {
+      version: 1,
+      tap: {
+        "shipworthyai/brewlock": {
+          url: "https://github.com/ShipWorthyAI/brewlock.git",
+          commit: "abc123",
+        },
+      },
+      brew: {},
+      cask: {},
+      mas: {},
+    };
+
+    const serialized = serializeLockFile(lockFile);
+    const parsed = parseLockFile(serialized);
+
+    expect(parsed.tap["shipworthyai/brewlock"]?.url).toBe(
+      "https://github.com/ShipWorthyAI/brewlock.git"
+    );
+    expect(parsed.tap["shipworthyai/brewlock"]?.commit).toBe("abc123");
   });
 });
 

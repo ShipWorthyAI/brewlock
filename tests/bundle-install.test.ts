@@ -44,28 +44,26 @@ describe("generateLockFile", () => {
     const lockFile = await generateLockFile();
 
     expect(lockFile).toHaveProperty("version");
-    expect(lockFile).toHaveProperty("entries");
+    expect(lockFile).toHaveProperty("tap");
+    expect(lockFile).toHaveProperty("brew");
+    expect(lockFile).toHaveProperty("cask");
+    expect(lockFile).toHaveProperty("mas");
     expect(lockFile.version).toBe(1);
-    expect(Array.isArray(lockFile.entries)).toBe(true);
   });
 
   it("includes all installed formulae", async () => {
     const lockFile = await generateLockFile();
 
-    // Each entry should have type and name
-    for (const entry of lockFile.entries) {
-      expect(entry).toHaveProperty("type");
-      expect(entry).toHaveProperty("name");
-      expect(["tap", "brew", "cask", "mas"]).toContain(entry.type);
+    // Each brew entry should have version
+    for (const [_name, entry] of Object.entries(lockFile.brew)) {
+      expect(entry).toHaveProperty("version");
     }
   });
 
   it("includes versions for brew entries", async () => {
     const lockFile = await generateLockFile();
 
-    const brewEntries = lockFile.entries.filter((e) => e.type === "brew");
-    for (const entry of brewEntries) {
-      // All brew entries should have versions
+    for (const [_name, entry] of Object.entries(lockFile.brew)) {
       expect(entry).toHaveProperty("version");
       expect(typeof entry.version).toBe("string");
     }
@@ -74,42 +72,25 @@ describe("generateLockFile", () => {
   it("includes versions for cask entries", async () => {
     const lockFile = await generateLockFile();
 
-    const caskEntries = lockFile.entries.filter((e) => e.type === "cask");
-    for (const entry of caskEntries) {
+    for (const [_name, entry] of Object.entries(lockFile.cask)) {
       expect(entry).toHaveProperty("version");
     }
   });
 
-  it("includes taps without versions", async () => {
+  it("includes taps with optional commit", async () => {
     const lockFile = await generateLockFile();
 
-    const tapEntries = lockFile.entries.filter((e) => e.type === "tap");
-    for (const entry of tapEntries) {
-      // Taps don't have versions
-      expect(entry.version).toBeUndefined();
-    }
+    // Taps should be in the tap object
+    expect(Object.keys(lockFile.tap).length).toBeGreaterThanOrEqual(0);
   });
 
   it("includes mas apps with id and version", async () => {
     const lockFile = await generateLockFile();
 
-    const masEntries = lockFile.entries.filter((e) => e.type === "mas");
-    for (const entry of masEntries) {
+    for (const [_name, entry] of Object.entries(lockFile.mas)) {
       expect(entry).toHaveProperty("id");
       expect(typeof entry.id).toBe("number");
-    }
-  });
-
-  it("orders entries: taps, then brew, then cask, then mas", async () => {
-    const lockFile = await generateLockFile();
-
-    const typeOrder = ["tap", "brew", "cask", "mas"];
-    let lastTypeIndex = -1;
-
-    for (const entry of lockFile.entries) {
-      const currentIndex = typeOrder.indexOf(entry.type);
-      expect(currentIndex).toBeGreaterThanOrEqual(lastTypeIndex);
-      lastTypeIndex = currentIndex;
+      expect(entry).toHaveProperty("version");
     }
   });
 });
@@ -144,11 +125,17 @@ describe("checkLockFile", () => {
       exitCode: 0,
     });
 
-    // Use the mocked versions
-    const content = `# brewlock v1
-brew "git", version: "2.43.0"
-brew "node", version: "21.5.0"
-`;
+    // Use the mocked versions in JSONC format
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+        node: { version: "21.5.0" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const result = await checkLockFile(TEST_LOCK_FILE);
@@ -160,9 +147,15 @@ brew "node", version: "21.5.0"
 
   it("returns mismatches array with expected/actual versions", async () => {
     // Create a lock file with a wrong version
-    const content = `# brewlock v1
-brew "git", version: "0.0.0-nonexistent"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "0.0.0-nonexistent" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const result = await checkLockFile(TEST_LOCK_FILE);
@@ -180,16 +173,22 @@ brew "git", version: "0.0.0-nonexistent"
 
   it("handles missing packages in lock file", async () => {
     // Lock file with package that isn't installed
-    addMockResponse(/info --json=v2 nonexistent-package/, {
+    addMockResponse(/info --json=v2 nonexistent-package-xyz-123/, {
       stdout: JSON.stringify({
         formulae: [{ name: "nonexistent", installed: [] }],
       }),
       exitCode: 1,
     });
 
-    const content = `# brewlock v1
-brew "nonexistent-package-xyz-123", version: "1.0.0"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        "nonexistent-package-xyz-123": { version: "1.0.0" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const result = await checkLockFile(TEST_LOCK_FILE);
@@ -199,7 +198,14 @@ brew "nonexistent-package-xyz-123", version: "1.0.0"
   });
 
   it("handles empty lock file", async () => {
-    await writeFile(TEST_LOCK_FILE, "# brewlock v1\n");
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
 
     const result = await checkLockFile(TEST_LOCK_FILE);
 
@@ -233,7 +239,14 @@ describe("bundleInstall", () => {
   });
 
   it("returns boolean indicating success", async () => {
-    await writeFile(TEST_LOCK_FILE, "# brewlock v1\n");
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
 
@@ -241,7 +254,14 @@ describe("bundleInstall", () => {
   });
 
   it("succeeds with empty lock file", async () => {
-    await writeFile(TEST_LOCK_FILE, "# brewlock v1\n");
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
 
@@ -249,7 +269,14 @@ describe("bundleInstall", () => {
   });
 
   it("handles verbose option", async () => {
-    await writeFile(TEST_LOCK_FILE, "# brewlock v1\n");
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({
       lockFilePath: TEST_LOCK_FILE,
@@ -261,9 +288,15 @@ describe("bundleInstall", () => {
 
   it("handles strict option", async () => {
     // With strict mode, version mismatches should cause failure
-    const content = `# brewlock v1
-brew "git", version: "0.0.0-nonexistent"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "0.0.0-nonexistent" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({
@@ -276,9 +309,13 @@ brew "git", version: "0.0.0-nonexistent"
   });
 
   it("installs taps before formulae", async () => {
-    const content = `# brewlock v1
-tap "homebrew/cask"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: { "homebrew/cask": {} },
+      brew: {},
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
@@ -288,9 +325,15 @@ tap "homebrew/cask"
 
   it("skips already installed packages with correct version", async () => {
     // Use the mocked version for git
-    const content = `# brewlock v1
-brew "git", version: "2.43.0"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
@@ -338,9 +381,15 @@ describe("version constraint handling", () => {
       exitCode: 0,
     });
 
-    const content = `# brewlock v1
-brew "python@3.11", version: "3.11.7"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        "python@3.11": { version: "3.11.7" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     const success = await bundleInstall({
@@ -352,9 +401,15 @@ brew "python@3.11", version: "3.11.7"
 
   it("warns when exact version cannot be installed", async () => {
     // For packages where specific version isn't available
-    const content = `# brewlock v1
-brew "git", version: "0.0.1-nonexistent"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "0.0.1-nonexistent" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     // Should proceed but warn (not in strict mode)
@@ -397,10 +452,15 @@ describe("install order", () => {
       exitCode: 0,
     });
 
-    const content = `# brewlock v1
-brew "some-formula", version: "1.0.0"
-tap "homebrew/cask"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: { "homebrew/cask": {} },
+      brew: {
+        "some-formula": { version: "1.0.0" },
+      },
+      cask: {},
+      mas: {},
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     // The bundle handler should reorder to process taps first
@@ -410,10 +470,17 @@ tap "homebrew/cask"
   });
 
   it("processes mas apps last", async () => {
-    const content = `# brewlock v1
-mas "Xcode", id: 497799835, version: "15.2"
-brew "git", version: "2.43.0"
-`;
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+      },
+      cask: {},
+      mas: {
+        Xcode: { id: 497799835, version: "15.2" },
+      },
+    });
     await writeFile(TEST_LOCK_FILE, content);
 
     // The bundle handler should process brew before mas

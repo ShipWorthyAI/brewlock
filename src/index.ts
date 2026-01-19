@@ -14,26 +14,41 @@ import {
   generateLockFile,
   getLockFilePath,
   readLockFile,
-  removeEntry,
-  upsertEntry,
+  removeBrew,
+  removeCask,
+  removeTap,
+  upsertBrew,
+  upsertCask,
+  upsertTap,
   writeLockFile,
 } from "./lock-manager.ts";
 import { parseCommand } from "./parser.ts";
-import type { LockEntry, PackageType } from "./types.ts";
-import { getPackageVersion } from "./version-resolver.ts";
+import type { PackageType } from "./types.ts";
+import {
+  getAllTapsWithInfo,
+  getPackageVersion,
+} from "./version-resolver.ts";
 
 export { bundleInstall } from "./bundle-install.ts";
 export { executeBrewCommand, executeBrewCommandStreaming } from "./executor.ts";
 export {
   checkLockFile,
+  createEmptyLockFile,
   DEFAULT_LOCK_FILE,
   generateLockFile,
   getLockFilePath,
   parseLockFile,
   readLockFile,
+  removeBrew,
+  removeCask,
   removeEntry,
+  removeMas,
+  removeTap,
   serializeLockFile,
-  upsertEntry,
+  upsertBrew,
+  upsertCask,
+  upsertMas,
+  upsertTap,
   writeLockFile,
 } from "./lock-manager.ts";
 // Export all public APIs
@@ -44,6 +59,7 @@ export {
   getAllInstalledCasks,
   getAllInstalledFormulae,
   getAllTaps,
+  getAllTapsWithInfo,
   getCaskVersion,
   getFormulaVersion,
   getMasApps,
@@ -118,18 +134,10 @@ async function handleLock(): Promise<void> {
   await writeLockFile(lockFile, lockFilePath);
 
   console.log(`\nGenerated ${lockFilePath} with:`);
-  console.log(
-    `  - ${lockFile.entries.filter((e) => e.type === "tap").length} taps`
-  );
-  console.log(
-    `  - ${lockFile.entries.filter((e) => e.type === "brew").length} formulae`
-  );
-  console.log(
-    `  - ${lockFile.entries.filter((e) => e.type === "cask").length} casks`
-  );
-  console.log(
-    `  - ${lockFile.entries.filter((e) => e.type === "mas").length} Mac App Store apps`
-  );
+  console.log(`  - ${Object.keys(lockFile.tap).length} taps`);
+  console.log(`  - ${Object.keys(lockFile.brew).length} formulae`);
+  console.log(`  - ${Object.keys(lockFile.cask).length} casks`);
+  console.log(`  - ${Object.keys(lockFile.mas).length} Mac App Store apps`);
 }
 
 /**
@@ -174,8 +182,11 @@ async function updateLockFile(
     for (const pkg of packages) {
       const version = await getPackageVersion(type, pkg);
       if (version) {
-        const entry: LockEntry = { type, name: pkg, version };
-        lockFile = upsertEntry(lockFile, entry);
+        if (type === "cask") {
+          lockFile = upsertCask(lockFile, pkg, { version });
+        } else {
+          lockFile = upsertBrew(lockFile, pkg, { version });
+        }
         console.log(`brewlock: Updated ${type} "${pkg}" → ${version}`);
       }
     }
@@ -192,20 +203,28 @@ async function updateLockFile(
   ) {
     // Remove entries for uninstalled packages
     for (const pkg of packages) {
-      lockFile = removeEntry(lockFile, type, pkg);
+      if (type === "cask") {
+        lockFile = removeCask(lockFile, pkg);
+      } else {
+        lockFile = removeBrew(lockFile, pkg);
+      }
       console.log(`brewlock: Removed ${type} "${pkg}" from lock file`);
     }
   } else if (command === "tap") {
-    // Add tap entries
-    for (const tap of packages) {
-      const entry: LockEntry = { type: "tap", name: tap };
-      lockFile = upsertEntry(lockFile, entry);
-      console.log(`brewlock: Added tap "${tap}"`);
+    // Add tap entries with URL and commit info
+    const tapInfos = await getAllTapsWithInfo();
+    for (const tapName of packages) {
+      const tapInfo = tapInfos.find((t) => t.name === tapName);
+      lockFile = upsertTap(lockFile, tapName, {
+        url: tapInfo?.url,
+        commit: tapInfo?.commit,
+      });
+      console.log(`brewlock: Added tap "${tapName}"`);
     }
   } else if (command === "untap") {
     // Remove tap entries
     for (const tap of packages) {
-      lockFile = removeEntry(lockFile, "tap", tap);
+      lockFile = removeTap(lockFile, tap);
       console.log(`brewlock: Removed tap "${tap}" from lock file`);
     }
   }

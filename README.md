@@ -13,7 +13,9 @@
 - **Transparent wrapper**: Alias `brewlock` to `brew` and use Homebrew normally
 - **Automatic version tracking**: Every install/uninstall/upgrade updates `brew.lock`
 - **Version-locked bundle install**: Install packages with version verification
-- **Full package support**: Tracks formulae, casks, taps, and Mac App Store apps
+- **Full package support**: Tracks formulae, casks, taps (with commit SHAs), and Mac App Store apps
+- **JSONC format**: Human-readable lock file with comment support
+- **Custom tap URLs**: Tracks custom tap repository URLs for reproducibility
 
 ## Installation
 
@@ -136,22 +138,104 @@ export BREWLOCK=/path/to/your/brew.lock
 export BREWLOCK="$HOME/dotfiles/brew.lock"
 ```
 
-The lock file uses standard Brewfile syntax with added version information:
+The lock file uses JSONC (JSON with Comments) format, organized by package type:
 
-```ruby
-# brewlock v1
-tap "homebrew/cask"
-tap "homebrew/bundle"
-
-brew "git", version: "2.43.0"
-brew "node", version: "21.5.0"
-brew "python@3.11", version: "3.11.7_1"
-
-cask "docker", version: "4.26.1"
-cask "visual-studio-code", version: "1.85.1"
-
-mas "Xcode", id: 497799835, version: "15.2"
+```jsonc
+{
+  "version": 1,
+  "tap": {
+    "homebrew/core": {
+      "commit": "a1b2c3d4e5f6...",
+      "official": true
+    },
+    "homebrew/cask": {
+      "commit": "f6e5d4c3b2a1...",
+      "official": true
+    },
+    "shipworthyai/brewlock": {
+      "url": "https://github.com/ShipWorthyAI/brewlock.git",
+      "commit": "abc123def456..."
+    }
+  },
+  "brew": {
+    "git": {
+      "version": "2.52.0",
+      "installed": ["2.52.0", "2.51.0"],
+      "revision": 1,
+      "tap": "homebrew/core",
+      "pinned": false,
+      "dependencies": ["gettext", "pcre2"],
+      "sha256": "c19806bab...",
+      "installed_as_dependency": false,
+      "installed_on_request": true
+    },
+    "node": {
+      "version": "21.5.0",
+      "tap": "homebrew/core",
+      "installed_on_request": true
+    }
+  },
+  "cask": {
+    "docker": {
+      "version": "4.26.1,123456",
+      "tap": "homebrew/cask",
+      "sha256": "0a55468...",
+      "auto_updates": true
+    },
+    "visual-studio-code": {
+      "version": "1.85.1",
+      "tap": "homebrew/cask",
+      "auto_updates": true
+    }
+  },
+  "mas": {
+    "Xcode": {
+      "id": 497799835,
+      "version": "15.2"
+    }
+  }
+}
 ```
+
+### Lock File Fields
+
+#### Tap Fields
+
+| Field | Description |
+|-------|-------------|
+| `url` | Custom GitHub repo URL (for non-official taps) |
+| `commit` | Git commit SHA for reproducibility |
+| `official` | Whether this is an official Homebrew tap |
+
+#### Brew (Formula) Fields
+
+| Field | Description |
+|-------|-------------|
+| `version` | Linked (active) version |
+| `installed` | All installed versions in Cellar (if multiple) |
+| `revision` | Formula revision (e.g., distinguishes `2.43.0` from `2.43.0_1`) |
+| `tap` | Source tap (e.g., `homebrew/core`) |
+| `pinned` | Whether the formula is pinned |
+| `dependencies` | Direct dependencies |
+| `sha256` | Platform-specific bottle SHA256 for verification |
+| `installed_as_dependency` | Whether installed as a dependency of another package |
+| `installed_on_request` | Whether user explicitly installed it |
+
+#### Cask Fields
+
+| Field | Description |
+|-------|-------------|
+| `version` | Installed cask version |
+| `tap` | Source tap (e.g., `homebrew/cask`) |
+| `sha256` | Download SHA256 for verification |
+| `auto_updates` | Whether the app self-updates |
+
+#### Mac App Store (mas) Fields
+
+| Field | Description |
+|-------|-------------|
+| `id` | App Store ID (required for installation) |
+| `version` | Installed app version |
 
 ## How It Works
 
@@ -199,16 +283,16 @@ bun run build:release
 ```
 brewlock/
   src/
-    index.ts          # CLI entry point
-    parser.ts         # Command parser
-    executor.ts       # Brew command executor
-    lock-manager.ts   # Lock file read/write
+    index.ts           # CLI entry point
+    parser.ts          # Command parser
+    executor.ts        # Brew command executor
+    lock-manager.ts    # Lock file read/write (JSONC format)
     version-resolver.ts # Version querying
-    bundle-handler.ts # Bundle install with versions
-    types.ts          # Shared type definitions
+    bundle-install.ts  # Bundle install with versions
+    types.ts           # Shared type definitions
   tests/
-    mocks/            # Test mocking utilities
-    *.test.ts         # Test files
+    mocks/             # Test mocking utilities
+    *.test.ts          # Test files
   package.json
   tsconfig.json
 ```

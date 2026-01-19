@@ -167,6 +167,30 @@ describe("getAllInstalledFormulae", () => {
     }
   });
 
+  it("captures new metadata fields (tap, dependencies, sha256)", async () => {
+    const packages = await getAllInstalledFormulae();
+    const git = packages.find((p) => p.name === "git");
+    expect(git).toBeDefined();
+    expect(git?.tap).toBe("homebrew/core");
+    expect(git?.dependencies).toEqual(["gettext", "pcre2"]);
+    expect(git?.sha256).toBe("abc123");
+    expect(git?.installed_as_dependency).toBe(false);
+    expect(git?.installed_on_request).toBe(true);
+  });
+
+  it("captures revision when non-zero", async () => {
+    const packages = await getAllInstalledFormulae();
+    const python = packages.find((p) => p.name === "python@3.11");
+    expect(python).toBeDefined();
+    expect(python?.revision).toBe(1);
+  });
+
+  it("uses linked_keg as version", async () => {
+    const packages = await getAllInstalledFormulae();
+    const git = packages.find((p) => p.name === "git");
+    expect(git?.version).toBe("2.43.0"); // linked_keg value
+  });
+
   it("handles empty list", async () => {
     resetMocking();
     addMockResponse("info --json=v2 --installed", {
@@ -202,6 +226,15 @@ describe("getAllInstalledCasks", () => {
       expect(cask).toHaveProperty("type");
       expect(cask.type).toBe("cask");
     }
+  });
+
+  it("captures new cask metadata fields (tap, sha256, auto_updates)", async () => {
+    const casks = await getAllInstalledCasks();
+    const docker = casks.find((c) => c.name === "docker");
+    expect(docker).toBeDefined();
+    expect(docker?.tap).toBe("homebrew/cask");
+    expect(docker?.sha256).toBe("abc123sha256");
+    expect(docker?.auto_updates).toBe(true);
   });
 });
 

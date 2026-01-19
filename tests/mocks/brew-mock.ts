@@ -98,7 +98,22 @@ export const MOCK_FORMULA_GIT_INFO = JSON.stringify({
     {
       name: "git",
       full_name: "git",
+      tap: "homebrew/core",
       versions: { stable: "2.43.0", head: null },
+      revision: 0,
+      dependencies: ["gettext", "pcre2"],
+      linked_keg: "2.43.0",
+      pinned: false,
+      bottle: {
+        stable: {
+          files: {
+            arm64_sonoma: {
+              url: "https://ghcr.io/...",
+              sha256: "abc123def456",
+            },
+          },
+        },
+      },
       installed: [
         {
           version: "2.43.0",
@@ -116,7 +131,13 @@ export const MOCK_FORMULA_NOT_INSTALLED = JSON.stringify({
     {
       name: "nonexistent",
       full_name: "nonexistent",
+      tap: "homebrew/core",
       versions: { stable: "1.0.0", head: null },
+      revision: 0,
+      dependencies: [],
+      linked_keg: null,
+      pinned: false,
+      bottle: {},
       installed: [],
     },
   ],
@@ -128,7 +149,19 @@ export const MOCK_ALL_FORMULAE = JSON.stringify({
     {
       name: "git",
       full_name: "git",
+      tap: "homebrew/core",
       versions: { stable: "2.43.0", head: null },
+      revision: 0,
+      dependencies: ["gettext", "pcre2"],
+      linked_keg: "2.43.0",
+      pinned: false,
+      bottle: {
+        stable: {
+          files: {
+            arm64_sonoma: { url: "https://ghcr.io/...", sha256: "abc123" },
+          },
+        },
+      },
       installed: [
         {
           version: "2.43.0",
@@ -140,7 +173,19 @@ export const MOCK_ALL_FORMULAE = JSON.stringify({
     {
       name: "node",
       full_name: "node",
+      tap: "homebrew/core",
       versions: { stable: "21.5.0", head: null },
+      revision: 0,
+      dependencies: [],
+      linked_keg: "21.5.0",
+      pinned: false,
+      bottle: {
+        stable: {
+          files: {
+            arm64_sonoma: { url: "https://ghcr.io/...", sha256: "def456" },
+          },
+        },
+      },
       installed: [
         {
           version: "21.5.0",
@@ -152,7 +197,19 @@ export const MOCK_ALL_FORMULAE = JSON.stringify({
     {
       name: "python@3.11",
       full_name: "python@3.11",
+      tap: "homebrew/core",
       versions: { stable: "3.11.7", head: null },
+      revision: 1,
+      dependencies: ["mpdecimal", "openssl@3", "sqlite", "xz"],
+      linked_keg: "3.11.7_1",
+      pinned: false,
+      bottle: {
+        stable: {
+          files: {
+            arm64_sonoma: { url: "https://ghcr.io/...", sha256: "ghi789" },
+          },
+        },
+      },
       installed: [
         {
           version: "3.11.7_1",
@@ -172,6 +229,9 @@ export const MOCK_CASK_DOCKER_INFO = JSON.stringify({
       name: ["Docker Desktop"],
       version: "4.26.1",
       installed: "4.26.1",
+      tap: "homebrew/cask",
+      sha256: "abc123sha256",
+      auto_updates: true,
     },
   ],
 });
@@ -184,6 +244,9 @@ export const MOCK_CASK_NOT_INSTALLED = JSON.stringify({
       name: ["Nonexistent App"],
       version: "1.0.0",
       installed: null,
+      tap: "homebrew/cask",
+      sha256: null,
+      auto_updates: null,
     },
   ],
 });
@@ -196,12 +259,18 @@ export const MOCK_ALL_CASKS = JSON.stringify({
       name: ["Docker Desktop"],
       version: "4.26.1",
       installed: "4.26.1",
+      tap: "homebrew/cask",
+      sha256: "abc123sha256",
+      auto_updates: true,
     },
     {
       token: "visual-studio-code",
       name: ["Visual Studio Code"],
       version: "1.85.1",
       installed: "1.85.1",
+      tap: "homebrew/cask",
+      sha256: "def456sha256",
+      auto_updates: true,
     },
   ],
 });

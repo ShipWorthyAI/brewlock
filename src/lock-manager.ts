@@ -1,15 +1,23 @@
 /**
- * Lock file manager for brew.lock
+ * Lock file manager for brew.lock (JSONC format)
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { LockEntry, LockFile, PackageType } from "./types.ts";
+import type {
+  BrewEntry,
+  CaskEntry,
+  LockFile,
+  MasEntry,
+  PackageType,
+  TapEntry,
+} from "./types.ts";
+import { LockFileSchema } from "./types.ts";
 import {
   getAllInstalledCasks,
   getAllInstalledFormulae,
-  getAllTaps,
+  getAllTapsWithInfo,
   getMasApps,
   getPackageVersion,
 } from "./version-resolver.ts";
@@ -32,138 +40,52 @@ export function getLockFilePath(): string {
 /** Lock file format version */
 const LOCK_VERSION = 1;
 
-/** Order of package types in the lock file */
-const TYPE_ORDER: PackageType[] = ["tap", "brew", "cask", "mas"];
+/**
+ * Create an empty lock file with default structure
+ */
+export function createEmptyLockFile(): LockFile {
+  return {
+    version: LOCK_VERSION,
+    tap: {},
+    brew: {},
+    cask: {},
+    mas: {},
+  };
+}
 
 /**
- * Parse a brew.lock file content into a LockFile structure
+ * Parse a brew.lock file content (JSONC) into a LockFile structure.
+ * Validates the parsed content against the schema.
+ * Provides defaults for missing sections to handle partial lock files.
  */
 export function parseLockFile(content: string): LockFile {
-  const entries: LockEntry[] = [];
-  let version = LOCK_VERSION;
-
-  const lines = content.split("\n");
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // Skip empty lines
-    if (!trimmed) continue;
-
-    // Parse version from header comment
-    if (trimmed.startsWith("# brewlock v")) {
-      const versionMatch = trimmed.match(/# brewlock v(\d+)/);
-      if (versionMatch?.[1]) {
-        version = Number.parseInt(versionMatch[1], 10);
-      }
-      continue;
-    }
-
-    // Skip other comments
-    if (trimmed.startsWith("#")) continue;
-
-    // Parse entry lines
-    const entry = parseEntryLine(trimmed);
-    if (entry) {
-      entries.push(entry);
-    }
+  if (!content.trim()) {
+    return createEmptyLockFile();
   }
 
-  return { version, entries };
+  try {
+    const parsed = Bun.JSONC.parse(content) as Partial<LockFile>;
+    // Provide defaults for missing sections before validation
+    const withDefaults = {
+      version: parsed.version ?? LOCK_VERSION,
+      tap: parsed.tap ?? {},
+      brew: parsed.brew ?? {},
+      cask: parsed.cask ?? {},
+      mas: parsed.mas ?? {},
+    };
+    // Validate and return the parsed lock file
+    return LockFileSchema.parse(withDefaults);
+  } catch {
+    // Return empty lock file if parsing or validation fails
+    return createEmptyLockFile();
+  }
 }
 
 /**
- * Parse a single entry line from the lock file
- */
-function parseEntryLine(line: string): LockEntry | null {
-  // Match: type "name"[, key: value]*
-  // Examples:
-  //   tap "homebrew/cask"
-  //   brew "git", version: "2.43.0"
-  //   cask "docker", version: "4.26.1"
-  //   mas "Xcode", id: 497799835, version: "15.2"
-
-  const typeMatch = line.match(/^(tap|brew|cask|mas)\s+"([^"]+)"/);
-  if (!typeMatch) return null;
-
-  const type = typeMatch[1] as PackageType;
-  const name = typeMatch[2];
-
-  if (!name) return null;
-
-  const entry: LockEntry = { type, name };
-
-  // Parse optional key: value pairs
-  const restOfLine = line.slice(typeMatch[0].length);
-
-  // Parse version
-  const versionMatch = restOfLine.match(/version:\s*"([^"]+)"/);
-  if (versionMatch?.[1]) {
-    entry.version = versionMatch[1];
-  }
-
-  // Parse id (for mas)
-  const idMatch = restOfLine.match(/id:\s*(\d+)/);
-  if (idMatch?.[1]) {
-    entry.id = Number.parseInt(idMatch[1], 10);
-  }
-
-  return entry;
-}
-
-/**
- * Serialize a LockFile structure to brew.lock file format
+ * Serialize a LockFile structure to JSONC format
  */
 export function serializeLockFile(lockFile: LockFile): string {
-  const lines: string[] = [`# brewlock v${lockFile.version}`];
-
-  // Group entries by type and sort
-  const grouped = new Map<PackageType, LockEntry[]>();
-  for (const type of TYPE_ORDER) {
-    grouped.set(type, []);
-  }
-
-  for (const entry of lockFile.entries) {
-    grouped.get(entry.type)?.push(entry);
-  }
-
-  let lastType: PackageType | null = null;
-
-  for (const type of TYPE_ORDER) {
-    const entries = grouped.get(type) ?? [];
-    if (entries.length === 0) continue;
-
-    // Add blank line between different types
-    if (lastType !== null) {
-      lines.push("");
-    }
-
-    for (const entry of entries) {
-      lines.push(serializeEntry(entry));
-    }
-
-    lastType = type;
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
-/**
- * Serialize a single lock entry to a line
- */
-function serializeEntry(entry: LockEntry): string {
-  let line = `${entry.type} "${entry.name}"`;
-
-  if (entry.type === "mas" && entry.id !== undefined) {
-    line += `, id: ${entry.id}`;
-    if (entry.version) {
-      line += `, version: "${entry.version}"`;
-    }
-  } else if (entry.version) {
-    line += `, version: "${entry.version}"`;
-  }
-
-  return line;
+  return `${JSON.stringify(lockFile, null, 2)}\n`;
 }
 
 /**
@@ -177,125 +99,248 @@ export async function readLockFile(path?: string): Promise<LockFile> {
     const exists = await file.exists();
 
     if (!exists) {
-      return { version: LOCK_VERSION, entries: [] };
+      return createEmptyLockFile();
     }
 
     const content = await file.text();
     return parseLockFile(content);
   } catch {
-    return { version: LOCK_VERSION, entries: [] };
+    return createEmptyLockFile();
   }
 }
 
 /**
- * Write a LockFile to disk
+ * Write a LockFile to disk.
+ * Validates the lock file before writing.
  */
 export async function writeLockFile(
   lockFile: LockFile,
   path?: string
 ): Promise<void> {
   const filePath = path ?? DEFAULT_LOCK_FILE;
-  const content = serializeLockFile(lockFile);
+  // Validate before writing
+  const validated = LockFileSchema.parse(lockFile);
+  const content = serializeLockFile(validated);
   await Bun.write(filePath, content);
 }
 
 /**
- * Add or update an entry in the lock file
+ * Add or update a tap entry in the lock file
  */
-export function upsertEntry(lockFile: LockFile, entry: LockEntry): LockFile {
-  const entries = [...lockFile.entries];
-
-  // Find existing entry with same type and name
-  const existingIndex = entries.findIndex(
-    (e) => e.type === entry.type && e.name === entry.name
-  );
-
-  if (existingIndex >= 0) {
-    // Update existing entry
-    entries[existingIndex] = { ...entry };
-  } else {
-    // Add new entry in the correct position based on type order
-    const typeIndex = TYPE_ORDER.indexOf(entry.type);
-    let insertIndex = entries.length;
-
-    for (let i = 0; i < entries.length; i++) {
-      const currentEntry = entries[i];
-      if (!currentEntry) continue;
-      const currentTypeIndex = TYPE_ORDER.indexOf(currentEntry.type);
-      if (currentTypeIndex > typeIndex) {
-        insertIndex = i;
-        break;
-      }
-    }
-
-    entries.splice(insertIndex, 0, { ...entry });
-  }
-
-  return { ...lockFile, entries };
+export function upsertTap(
+  lockFile: LockFile,
+  name: string,
+  entry: TapEntry
+): LockFile {
+  return {
+    ...lockFile,
+    tap: {
+      ...lockFile.tap,
+      [name]: entry,
+    },
+  };
 }
 
 /**
- * Remove an entry from the lock file
+ * Add or update a brew entry in the lock file
+ */
+export function upsertBrew(
+  lockFile: LockFile,
+  name: string,
+  entry: BrewEntry
+): LockFile {
+  return {
+    ...lockFile,
+    brew: {
+      ...lockFile.brew,
+      [name]: entry,
+    },
+  };
+}
+
+/**
+ * Add or update a cask entry in the lock file
+ */
+export function upsertCask(
+  lockFile: LockFile,
+  name: string,
+  entry: CaskEntry
+): LockFile {
+  return {
+    ...lockFile,
+    cask: {
+      ...lockFile.cask,
+      [name]: entry,
+    },
+  };
+}
+
+/**
+ * Add or update a mas entry in the lock file
+ */
+export function upsertMas(
+  lockFile: LockFile,
+  name: string,
+  entry: MasEntry
+): LockFile {
+  return {
+    ...lockFile,
+    mas: {
+      ...lockFile.mas,
+      [name]: entry,
+    },
+  };
+}
+
+/**
+ * Remove a tap entry from the lock file
+ */
+export function removeTap(lockFile: LockFile, name: string): LockFile {
+  const { [name]: _, ...rest } = lockFile.tap;
+  return {
+    ...lockFile,
+    tap: rest,
+  };
+}
+
+/**
+ * Remove a brew entry from the lock file
+ */
+export function removeBrew(lockFile: LockFile, name: string): LockFile {
+  const { [name]: _, ...rest } = lockFile.brew;
+  return {
+    ...lockFile,
+    brew: rest,
+  };
+}
+
+/**
+ * Remove a cask entry from the lock file
+ */
+export function removeCask(lockFile: LockFile, name: string): LockFile {
+  const { [name]: _, ...rest } = lockFile.cask;
+  return {
+    ...lockFile,
+    cask: rest,
+  };
+}
+
+/**
+ * Remove a mas entry from the lock file
+ */
+export function removeMas(lockFile: LockFile, name: string): LockFile {
+  const { [name]: _, ...rest } = lockFile.mas;
+  return {
+    ...lockFile,
+    mas: rest,
+  };
+}
+
+/**
+ * Remove an entry from the lock file by type and name
  */
 export function removeEntry(
   lockFile: LockFile,
-  type: LockEntry["type"],
+  type: PackageType,
   name: string
 ): LockFile {
-  const entries = lockFile.entries.filter(
-    (e) => !(e.type === type && e.name === name)
-  );
-
-  return { ...lockFile, entries };
+  switch (type) {
+    case "tap":
+      return removeTap(lockFile, name);
+    case "brew":
+      return removeBrew(lockFile, name);
+    case "cask":
+      return removeCask(lockFile, name);
+    case "mas":
+      return removeMas(lockFile, name);
+  }
 }
 
 /**
  * Generate a lock file from currently installed packages
  */
 export async function generateLockFile(): Promise<LockFile> {
-  const entries: LockEntry[] = [];
+  const lockFile = createEmptyLockFile();
 
-  // Get all taps
-  const taps = await getAllTaps();
+  // Get all taps with info
+  const taps = await getAllTapsWithInfo();
   for (const tap of taps) {
-    entries.push({ type: "tap", name: tap });
+    const entry: TapEntry = {};
+    if (tap.url) {
+      entry.url = tap.url;
+    }
+    if (tap.commit) {
+      entry.commit = tap.commit;
+    }
+    if (tap.official) {
+      entry.official = tap.official;
+    }
+    lockFile.tap[tap.name] = entry;
   }
 
   // Get all installed formulae
   const formulae = await getAllInstalledFormulae();
   for (const formula of formulae) {
-    entries.push({
-      type: "brew",
-      name: formula.name,
+    const entry: BrewEntry = {
       version: formula.version,
-    });
+    };
+    if (formula.installed !== undefined) {
+      entry.installed = formula.installed;
+    }
+    if (formula.revision !== undefined) {
+      entry.revision = formula.revision;
+    }
+    if (formula.tap !== undefined) {
+      entry.tap = formula.tap;
+    }
+    if (formula.pinned !== undefined) {
+      entry.pinned = formula.pinned;
+    }
+    if (formula.dependencies !== undefined) {
+      entry.dependencies = formula.dependencies;
+    }
+    if (formula.sha256 !== undefined) {
+      entry.sha256 = formula.sha256;
+    }
+    if (formula.installed_as_dependency !== undefined) {
+      entry.installed_as_dependency = formula.installed_as_dependency;
+    }
+    if (formula.installed_on_request !== undefined) {
+      entry.installed_on_request = formula.installed_on_request;
+    }
+    lockFile.brew[formula.name] = entry;
   }
 
   // Get all installed casks
   const casks = await getAllInstalledCasks();
   for (const cask of casks) {
-    entries.push({
-      type: "cask",
-      name: cask.name,
+    const entry: CaskEntry = {
       version: cask.version,
-    });
+    };
+    if (cask.tap !== undefined) {
+      entry.tap = cask.tap;
+    }
+    if (cask.sha256 !== undefined) {
+      entry.sha256 = cask.sha256;
+    }
+    if (cask.auto_updates !== undefined) {
+      entry.auto_updates = cask.auto_updates;
+    }
+    lockFile.cask[cask.name] = entry;
   }
 
   // Get all mas apps
   const masApps = await getMasApps();
   for (const app of masApps) {
-    entries.push({
-      type: "mas",
-      name: app.name,
-      version: app.version,
-      id: app.id,
-    });
+    if (app.id !== undefined) {
+      lockFile.mas[app.name] = {
+        id: app.id,
+        version: app.version,
+      };
+    }
   }
 
-  return {
-    version: 1,
-    entries,
-  };
+  return lockFile;
 }
 
 /**
@@ -312,19 +357,40 @@ export async function checkLockFile(lockFilePath: string): Promise<{
     actual: string | null;
   }> = [];
 
-  for (const entry of lockFile.entries) {
-    // Skip taps (they don't have versions)
-    if (entry.type === "tap") continue;
-
-    const expectedVersion = entry.version;
-    if (!expectedVersion) continue;
-
-    const actualVersion = await getPackageVersion(entry.type, entry.name);
-
-    if (actualVersion !== expectedVersion) {
+  // Check brew entries
+  for (const name of Object.keys(lockFile.brew)) {
+    const entry = lockFile.brew[name];
+    const actualVersion = await getPackageVersion("brew", name);
+    if (entry && actualVersion !== entry.version) {
       mismatches.push({
-        name: entry.name,
-        expected: expectedVersion,
+        name,
+        expected: entry.version,
+        actual: actualVersion,
+      });
+    }
+  }
+
+  // Check cask entries
+  for (const name of Object.keys(lockFile.cask)) {
+    const entry = lockFile.cask[name];
+    const actualVersion = await getPackageVersion("cask", name);
+    if (entry && actualVersion !== entry.version) {
+      mismatches.push({
+        name,
+        expected: entry.version,
+        actual: actualVersion,
+      });
+    }
+  }
+
+  // Check mas entries
+  for (const name of Object.keys(lockFile.mas)) {
+    const entry = lockFile.mas[name];
+    const actualVersion = await getPackageVersion("mas", name);
+    if (entry && actualVersion !== entry.version) {
+      mismatches.push({
+        name,
+        expected: entry.version,
         actual: actualVersion,
       });
     }
