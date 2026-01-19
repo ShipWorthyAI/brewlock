@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "biomejs.biome",
+    "oven.bun-vscode",
+    "mylesmurphy.prettify-ts",
+    "yoavbls.pretty-ts-errors"
+  ]
+}

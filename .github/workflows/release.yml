@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    outputs:
+      version_changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if version changed
+        id: check
+        run: |
+          # Get current version
+          CURRENT_VERSION=$(jq -r '.version' package.json)
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Get previous version
+          git show HEAD~1:package.json > /tmp/prev-package.json 2>/dev/null || echo '{"version":"0.0.0"}' > /tmp/prev-package.json
+          PREV_VERSION=$(jq -r '.version' /tmp/prev-package.json)
+          echo "Previous version: $PREV_VERSION"
+          
+          # Check if version changed
+          if [ "$CURRENT_VERSION" != "$PREV_VERSION" ]; then
+            echo "Version changed from $PREV_VERSION to $CURRENT_VERSION"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "Version unchanged"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.version_changed == 'true'
+    runs-on: macos-14  # Apple Silicon
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build binary and create tarball
+        run: bun scripts/release.ts --tarball
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: brewlock-darwin-arm64
+          path: brewlock-darwin-arm64.tar.gz
+
+  release:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -la artifacts/*/
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            for file in "$dir"*.tar.gz; do
+              sha256sum "$file" >> checksums.txt
+            done
+          done
+          cat checksums.txt
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/checksums.txt
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-formula:
+    needs: [check-version, release]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Calculate SHA256 and update formula
+        run: |
+          SHA256=$(sha256sum artifacts/brewlock-darwin-arm64/brewlock-darwin-arm64.tar.gz | cut -d' ' -f1)
+          
+          echo "SHA256: $SHA256"
+          echo "Version: $VERSION"
+          
+          # Update the formula file
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/brewlock.rb
+          sed -i "s|releases/download/v[^/]*/|releases/download/v${VERSION}/|g" Formula/brewlock.rb
+          sed -i "s/PLACEHOLDER_SHA256/$SHA256/" Formula/brewlock.rb
+          # Replace existing 64-char hex SHA256 hashes
+          sed -i 's/sha256 "[a-f0-9]\{64\}"/sha256 "'"$SHA256"'"/' Formula/brewlock.rb
+          
+          cat Formula/brewlock.rb
+
+      - name: Commit updated formula
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update formula for v${{ env.VERSION }}"
+          file_pattern: Formula/brewlock.rb
+          branch: main
