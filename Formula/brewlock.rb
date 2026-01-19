@@ -4,14 +4,14 @@
 class Brewlock < Formula
   desc "The missing lock file for Homebrew"
   homepage "https://github.com/ShipWorthyAI/brewlock"
-  version "0.2.0"
+  version "0.3.0"
   license "MIT"
 
   depends_on arch: :arm64
   depends_on :macos
 
-  url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.2.0/brewlock-darwin-arm64.tar.gz"
-  sha256 "ecd86a91d9696aec3871fc676f894b3e506a3e120703e5729c6bee74abb8092c"
+  url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.3.0/brewlock-darwin-arm64.tar.gz"
+  sha256 "edba9dcdb1713363fed12ca19d97cd3d7e699a84d72218714d483edbf9b2f195"
 
   def install
     bin.install "brewlock"
