@@ -11,7 +11,7 @@ class Brewlock < Formula
   depends_on :macos
 
   url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.1.0/brewlock-darwin-arm64.tar.gz"
-  sha256 "PLACEHOLDER_SHA256"
+  sha256 "a813e364365faf6963f54b2eb76c8e71c31aaab59f3b8196485d455d1ac99659"
 
   def install
     bin.install "brewlock"
