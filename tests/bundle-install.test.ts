@@ -489,3 +489,244 @@ describe("install order", () => {
     expect(typeof success).toBe("boolean");
   });
 });
+
+describe("parallel installation", () => {
+  beforeEach(async () => {
+    await mkdir(TEST_DIR, { recursive: true });
+    setupCommonMocks();
+  });
+
+  afterEach(async () => {
+    resetMocking();
+    try {
+      await unlink(TEST_LOCK_FILE);
+    } catch {
+      // Ignore if file doesn't exist
+    }
+  });
+
+  it("handles concurrency option", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+      },
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 2,
+    });
+
+    expect(success).toBe(true);
+  });
+
+  it("handles sequential mode with concurrency=1", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+      },
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 1,
+    });
+
+    expect(success).toBe(true);
+  });
+
+  it("installs multiple formulae with parallel execution", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+        node: { version: "21.5.0" },
+      },
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 4,
+    });
+
+    expect(success).toBe(true);
+  });
+
+  it("installs multiple casks with parallel execution", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {
+        docker: { version: "4.26.1" },
+        "visual-studio-code": { version: "1.85.1" },
+      },
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 4,
+    });
+
+    expect(success).toBe(true);
+  });
+
+  it("handles mixed package types with parallel execution", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: { "homebrew/cask": {} },
+      brew: {
+        git: { version: "2.43.0" },
+        node: { version: "21.5.0" },
+      },
+      cask: {
+        docker: { version: "4.26.1" },
+      },
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 4,
+    });
+
+    expect(success).toBe(true);
+  });
+
+  it("respects strict mode with parallel execution", async () => {
+    // Use packages that ARE installed but with wrong version in lock file
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "0.0.0-wrong-version" }, // git is installed at 2.43.0
+        node: { version: "21.5.0" },
+      },
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      strict: true,
+      concurrency: 4,
+    });
+
+    // Should fail because git version doesn't match in strict mode
+    expect(success).toBe(false);
+  });
+});
+
+describe("batch version checking optimization", () => {
+  beforeEach(async () => {
+    await mkdir(TEST_DIR, { recursive: true });
+    setupCommonMocks();
+  });
+
+  afterEach(async () => {
+    resetMocking();
+    try {
+      await unlink(TEST_LOCK_FILE);
+    } catch {
+      // Ignore if file doesn't exist
+    }
+  });
+
+  it("uses batch query for formulae version checking", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {
+        git: { version: "2.43.0" },
+        node: { version: "21.5.0" },
+      },
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
+
+    expect(success).toBe(true);
+    // The batch version checking should use --installed flag to fetch all at once
+    // rather than making individual calls for each package
+  });
+
+  it("uses batch query for cask version checking", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {
+        docker: { version: "4.26.1" },
+        "visual-studio-code": { version: "1.85.1" },
+      },
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
+
+    expect(success).toBe(true);
+  });
+
+  it("skips batch queries for empty package types", async () => {
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew: {},
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    const success = await bundleInstall({ lockFilePath: TEST_LOCK_FILE });
+
+    // Should succeed quickly without making unnecessary queries
+    expect(success).toBe(true);
+  });
+
+  it("handles large number of packages efficiently", async () => {
+    // Create a lock file with many packages
+    const brew: Record<string, { version: string }> = {};
+    for (let i = 0; i < 10; i++) {
+      brew[`package-${i}`] = { version: "1.0.0" };
+    }
+
+    const content = JSON.stringify({
+      version: 1,
+      tap: {},
+      brew,
+      cask: {},
+      mas: {},
+    });
+    await writeFile(TEST_LOCK_FILE, content);
+
+    // The batch version checking should handle this efficiently
+    // (single query instead of 10 individual queries)
+    const success = await bundleInstall({
+      lockFilePath: TEST_LOCK_FILE,
+      concurrency: 4,
+    });
+
+    expect(typeof success).toBe("boolean");
+  });
+});

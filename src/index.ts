@@ -105,6 +105,8 @@ const HELP_TEXT = {
   commands: (cmd: string) => `
 COMMANDS:
   ${cmd} bundle install    Install from Brewfile using version constraints
+                           Options: --concurrency=N (default: 4, parallel installs)
+                                    --strict (fail on version mismatch)
   ${cmd} lock              Generate brew.lock from installed packages
   ${cmd} check             Check if installed versions match brew.lock
   ${cmd} help              Show this help message
@@ -294,17 +296,33 @@ async function updateLockFile(
   await writeLockFile(lockFile, lockFilePath);
 }
 
+/** Parsed bundle install options */
+interface BundleInstallCliOptions {
+  lockFilePath: string;
+  concurrency: number;
+  strict: boolean;
+}
+
+/** Default concurrency for parallel installations */
+const DEFAULT_CONCURRENCY = 4;
+
 /**
- * Parse lock file path from bundle install arguments
- * Supports: --lockfile=/path, --lockfile /path, or positional /path
+ * Parse bundle install arguments
+ * Supports: --lockfile=/path, --lockfile /path, --concurrency=N, --strict, or positional /path
  */
-function parseBundleInstallLockPath(args: string[]): string {
+function parseBundleInstallArgs(args: string[]): BundleInstallCliOptions {
+  const options: BundleInstallCliOptions = {
+    lockFilePath: getLockFilePath(),
+    concurrency: DEFAULT_CONCURRENCY,
+    strict: false,
+  };
+
   // Find args after "bundle install"
   const bundleIndex = args.indexOf("bundle");
-  if (bundleIndex === -1) return getLockFilePath();
+  if (bundleIndex === -1) return options;
 
   const installIndex = args.indexOf("install", bundleIndex);
-  if (installIndex === -1) return getLockFilePath();
+  if (installIndex === -1) return options;
 
   // Get remaining args after "bundle install"
   const remainingArgs = args.slice(installIndex + 1);
@@ -315,36 +333,71 @@ function parseBundleInstallLockPath(args: string[]): string {
 
     // Handle --lockfile=/path/to/file
     if (arg.startsWith("--lockfile=")) {
-      return arg.slice("--lockfile=".length);
+      options.lockFilePath = arg.slice("--lockfile=".length);
+      continue;
     }
 
     // Handle --lockfile /path/to/file
     const nextArg = remainingArgs[i + 1];
     if (arg === "--lockfile" && nextArg !== undefined) {
-      return nextArg;
+      options.lockFilePath = nextArg;
+      i++; // Skip next arg
+      continue;
     }
 
-    // Handle positional argument (first non-flag argument)
+    // Handle --concurrency=N
+    if (arg.startsWith("--concurrency=")) {
+      const value = Number.parseInt(arg.slice("--concurrency=".length), 10);
+      if (!Number.isNaN(value) && value > 0) {
+        options.concurrency = value;
+      }
+      continue;
+    }
+
+    // Handle --concurrency N
+    if (arg === "--concurrency" && nextArg !== undefined) {
+      const value = Number.parseInt(nextArg, 10);
+      if (!Number.isNaN(value) && value > 0) {
+        options.concurrency = value;
+      }
+      i++; // Skip next arg
+      continue;
+    }
+
+    // Handle --strict
+    if (arg === "--strict") {
+      options.strict = true;
+      continue;
+    }
+
+    // Handle positional argument (first non-flag argument) as lock file path
     if (!arg.startsWith("-")) {
-      return arg;
+      options.lockFilePath = arg;
     }
   }
 
-  return getLockFilePath();
+  return options;
 }
 
 /**
  * Handle bundle install with version checking
  */
-async function handleBundleInstall(lockFilePath?: string): Promise<boolean> {
-  const resolvedPath = lockFilePath ?? getLockFilePath();
+async function handleBundleInstall(
+  options: BundleInstallCliOptions
+): Promise<boolean> {
   console.log(
-    `brewlock: Installing from ${resolvedPath} with version constraints...`
+    `brewlock: Installing from ${options.lockFilePath} with version constraints...`
   );
 
+  if (options.concurrency !== DEFAULT_CONCURRENCY) {
+    console.log(`brewlock: Using concurrency: ${options.concurrency}`);
+  }
+
   const success = await bundleInstall({
-    lockFilePath: resolvedPath,
+    lockFilePath: options.lockFilePath,
     verbose: true,
+    strict: options.strict,
+    concurrency: options.concurrency,
   });
 
   return success;
@@ -383,8 +436,8 @@ async function main(): Promise<void> {
 
   // Handle bundle install specially
   if (parsed.isBundle && parsed.subcommand === "install") {
-    const lockFilePath = parseBundleInstallLockPath(args);
-    const success = await handleBundleInstall(lockFilePath);
+    const bundleOptions = parseBundleInstallArgs(args);
+    const success = await handleBundleInstall(bundleOptions);
     process.exit(success ? 0 : 1);
   }
 

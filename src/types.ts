@@ -209,4 +209,6 @@ export interface BundleInstallOptions {
   strict?: boolean;
   /** Verbose output */
   verbose?: boolean;
+  /** Number of concurrent installations (default: 4, set to 1 for sequential) */
+  concurrency?: number;
 }
