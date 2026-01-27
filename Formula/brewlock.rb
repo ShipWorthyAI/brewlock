@@ -7,11 +7,19 @@ class Brewlock < Formula
   version "0.3.0"
   license "MIT"
 
-  depends_on arch: :arm64
-  depends_on :macos
+  on_macos do
+    depends_on arch: :arm64
 
-  url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.3.0/brewlock-darwin-arm64.tar.gz"
-  sha256 "edba9dcdb1713363fed12ca19d97cd3d7e699a84d72218714d483edbf9b2f195"
+    url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.3.0/brewlock-darwin-arm64.tar.gz"
+    sha256 "edba9dcdb1713363fed12ca19d97cd3d7e699a84d72218714d483edbf9b2f195"
+  end
+
+  on_linux do
+    depends_on arch: :x86_64
+
+    url "https://github.com/ShipWorthyAI/brewlock/releases/download/v0.3.0/brewlock-linux-x64.tar.gz"
+    sha256 "PLACEHOLDER_LINUX_X64_SHA256"
+  end
 
   def install
     bin.install "brewlock"

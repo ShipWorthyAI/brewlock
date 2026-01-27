@@ -49,7 +49,14 @@ jobs:
   build:
     needs: check-version
     if: needs.check-version.outputs.version_changed == 'true'
-    runs-on: macos-14  # Apple Silicon
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: brewlock-darwin-arm64
+          - os: ubuntu-latest
+            artifact: brewlock-linux-x64
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -67,8 +74,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: brewlock-darwin-arm64
-          path: brewlock-darwin-arm64.tar.gz
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
 
   release:
     needs: [check-version, build]
@@ -133,17 +140,26 @@ jobs:
 
       - name: Calculate SHA256 and update formula
         run: |
-          SHA256=$(sha256sum artifacts/brewlock-darwin-arm64/brewlock-darwin-arm64.tar.gz | cut -d' ' -f1)
+          # Calculate SHA256 for each platform
+          SHA256_DARWIN_ARM64=$(sha256sum artifacts/brewlock-darwin-arm64/brewlock-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA256_LINUX_X64=$(sha256sum artifacts/brewlock-linux-x64/brewlock-linux-x64.tar.gz | cut -d' ' -f1)
           
-          echo "SHA256: $SHA256"
+          echo "SHA256 Darwin ARM64: $SHA256_DARWIN_ARM64"
+          echo "SHA256 Linux x64: $SHA256_LINUX_X64"
           echo "Version: $VERSION"
           
-          # Update the formula file
+          # Update version in formula
           sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/brewlock.rb
+          
+          # Update download URLs with new version
           sed -i "s|releases/download/v[^/]*/|releases/download/v${VERSION}/|g" Formula/brewlock.rb
-          sed -i "s/PLACEHOLDER_SHA256/$SHA256/" Formula/brewlock.rb
-          # Replace existing 64-char hex SHA256 hashes
-          sed -i 's/sha256 "[a-f0-9]\{64\}"/sha256 "'"$SHA256"'"/' Formula/brewlock.rb
+          
+          # Update SHA256 for each platform
+          # Darwin ARM64 - first sha256 after darwin-arm64.tar.gz
+          sed -i "/darwin-arm64.tar.gz/{n;s/sha256 \"[^\"]*\"/sha256 \"$SHA256_DARWIN_ARM64\"/}" Formula/brewlock.rb
+          
+          # Linux x64 - first sha256 after linux-x64.tar.gz
+          sed -i "/linux-x64.tar.gz/{n;s/sha256 \"[^\"]*\"/sha256 \"$SHA256_LINUX_X64\"/}" Formula/brewlock.rb
           
           cat Formula/brewlock.rb
 
