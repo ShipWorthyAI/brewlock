@@ -7,6 +7,8 @@
  * a brew.lock file with exact versions for reproducible installations.
  */
 
+import { $ } from "bun";
+
 import { bundleInstall } from "./bundle-install.ts";
 import { executeBrewCommandStreaming } from "./executor.ts";
 import {
@@ -24,10 +26,7 @@ import {
 } from "./lock-manager.ts";
 import { parseCommand } from "./parser.ts";
 import type { PackageType } from "./types.ts";
-import {
-  getAllTapsWithInfo,
-  getPackageVersion,
-} from "./version-resolver.ts";
+import { getAllTapsWithInfo, getPackageVersion } from "./version-resolver.ts";
 
 export { bundleInstall } from "./bundle-install.ts";
 export { executeBrewCommand, executeBrewCommandStreaming } from "./executor.ts";
@@ -67,34 +66,77 @@ export {
 } from "./version-resolver.ts";
 
 /**
- * Print help message
+ * Resolve brew paths and determine if brewlock is aliased as 'brew'
+ * Returns the real brew path and whether the alias is set up
  */
-function printHelp(): void {
-  console.log(`
-brewlock - A version-locking wrapper for Homebrew
+async function resolveBrewPaths(): Promise<{
+  isAliased: boolean;
+  realBrewPath: string | null;
+}> {
+  try {
+    const result = await $`which -a brew`.quiet().text();
+    const paths = result.trim().split("\n").filter(Boolean);
 
-USAGE:
-  brewlock <brew-command> [args...]
-  brewlock lock              Generate brew.lock from installed packages
-  brewlock check             Check if installed versions match brew.lock
-  brewlock help              Show this help message
+    const isAliased = paths[0]?.includes("brewlock") ?? false;
+    const realBrewPath = paths.find((p) => !p.includes("brewlock")) ?? null;
 
-DESCRIPTION:
-  brewlock wraps the Homebrew CLI and maintains a brew.lock file containing
-  exact versions of all installed packages. This enables reproducible
-  installations across machines.
+    return { isAliased, realBrewPath };
+  } catch {
+    return { isAliased: false, realBrewPath: null };
+  }
+}
 
+/**
+ * Get help output from the real brew binary
+ */
+async function getRealBrewHelp(brewPath: string): Promise<string | null> {
+  try {
+    const result = await $`${brewPath} help`.quiet().text();
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Help text components
+ */
+const HELP_TEXT = {
+  commands: (cmd: string) => `
 COMMANDS:
+  ${cmd} bundle install    Install from Brewfile using version constraints
+  ${cmd} lock              Generate brew.lock from installed packages
+  ${cmd} check             Check if installed versions match brew.lock
+  ${cmd} help              Show this help message
+`,
+
+  behavior: `
+BEHAVIOR:
   All standard brew commands are supported. brewlock will:
   - Pass commands through to brew
   - Update brew.lock when packages are installed/uninstalled/upgraded
-  - Use brew.lock for 'bundle install' to verify version compatibility
+  - Use brew.lock for 'bundle install' to verify version compatibility`,
 
-BREWLOCK-SPECIFIC COMMANDS:
-  lock     Generate a brew.lock file from currently installed packages
-  check    Check if installed packages match versions in brew.lock
-  help     Show this help message
+  examples: (cmd: string) => `
+EXAMPLES:
+  ${cmd} install git       Install git and update brew.lock
+  ${cmd} upgrade           Upgrade all packages and update brew.lock
+  ${cmd} lock              Generate brew.lock from current installation
+  ${cmd} check             Verify installed versions match brew.lock
+  ${cmd} bundle install    Install from Brewfile using version constraints
+  ${cmd} bundle install /path/to/brew.lock
+                           Optionally specify lock file path (falls back to
+                           $BREWLOCK or ~/brew.lock)`,
 
+  envAndFiles: `
+ENVIRONMENT VARIABLES:
+  BREWLOCK     Path to the lock file (default: ~/brew.lock)
+               Example: export BREWLOCK=/path/to/your/brew.lock
+
+FILES:
+  brew.lock    Lock file in Brewfile format with version information`,
+
+  aliasSetup: `
 SETUP:
   To use brewlock as a transparent wrapper, add this alias to your shell:
 
@@ -105,22 +147,42 @@ SETUP:
   alias brew='brewlock'
 
   # For fish (add to ~/.config/fish/config.fish):
-  alias brew 'brewlock'
+  alias brew 'brewlock'`,
+};
 
-EXAMPLES:
-  brewlock install git       Install git and update brew.lock
-  brewlock upgrade           Upgrade all packages and update brew.lock
-  brewlock lock              Generate brew.lock from current installation
-  brewlock check             Verify installed versions match brew.lock
-  brewlock bundle install    Install from Brewfile using version constraints
+/**
+ * Print help message
+ */
+async function printHelp(): Promise<void> {
+  const { isAliased, realBrewPath } = await resolveBrewPaths();
 
-ENVIRONMENT VARIABLES:
-  BREWLOCK     Path to the lock file (default: ~/brew.lock)
-               Example: export BREWLOCK=/path/to/your/brew.lock
+  if (isAliased && realBrewPath) {
+    // Show real brew help followed by brewlock-specific commands
+    const brewHelp = await getRealBrewHelp(realBrewPath);
+    if (brewHelp) {
+      console.log(brewHelp);
+    }
 
-FILES:
-  brew.lock    Lock file in Brewfile format with version information
-`);
+    console.log(HELP_TEXT.commands("brew"));
+    console.log(HELP_TEXT.behavior);
+    console.log(HELP_TEXT.examples("brew"));
+    console.log(HELP_TEXT.envAndFiles);
+  } else {
+    // Show standalone brewlock help with alias setup instructions
+    console.log(`
+brewlock - A version-locking wrapper for Homebrew
+
+DESCRIPTION:
+  brewlock wraps the Homebrew CLI and maintains a brew.lock file containing
+  exact versions of all installed packages. This enables reproducible
+  installations across machines.`);
+    console.log(HELP_TEXT.commands("brewlock"));
+    console.log(HELP_TEXT.behavior);
+    console.log(HELP_TEXT.aliasSetup);
+    console.log(HELP_TEXT.examples("brewlock"));
+    console.log(HELP_TEXT.envAndFiles);
+  }
+  console.log();
 }
 
 /**
@@ -233,15 +295,55 @@ async function updateLockFile(
 }
 
 /**
+ * Parse lock file path from bundle install arguments
+ * Supports: --lockfile=/path, --lockfile /path, or positional /path
+ */
+function parseBundleInstallLockPath(args: string[]): string {
+  // Find args after "bundle install"
+  const bundleIndex = args.indexOf("bundle");
+  if (bundleIndex === -1) return getLockFilePath();
+
+  const installIndex = args.indexOf("install", bundleIndex);
+  if (installIndex === -1) return getLockFilePath();
+
+  // Get remaining args after "bundle install"
+  const remainingArgs = args.slice(installIndex + 1);
+
+  for (let i = 0; i < remainingArgs.length; i++) {
+    const arg = remainingArgs[i];
+    if (arg === undefined) continue;
+
+    // Handle --lockfile=/path/to/file
+    if (arg.startsWith("--lockfile=")) {
+      return arg.slice("--lockfile=".length);
+    }
+
+    // Handle --lockfile /path/to/file
+    const nextArg = remainingArgs[i + 1];
+    if (arg === "--lockfile" && nextArg !== undefined) {
+      return nextArg;
+    }
+
+    // Handle positional argument (first non-flag argument)
+    if (!arg.startsWith("-")) {
+      return arg;
+    }
+  }
+
+  return getLockFilePath();
+}
+
+/**
  * Handle bundle install with version checking
  */
-async function handleBundleInstall(): Promise<boolean> {
+async function handleBundleInstall(lockFilePath?: string): Promise<boolean> {
+  const resolvedPath = lockFilePath ?? getLockFilePath();
   console.log(
-    "brewlock: Installing from brew.lock with version constraints..."
+    `brewlock: Installing from ${resolvedPath} with version constraints...`
   );
 
   const success = await bundleInstall({
-    lockFilePath: getLockFilePath(),
+    lockFilePath: resolvedPath,
     verbose: true,
   });
 
@@ -255,14 +357,14 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
-    printHelp();
+    await printHelp();
     process.exit(0);
   }
 
   // Handle brewlock-specific commands
   const firstArg = args[0];
   if (firstArg === "help" || firstArg === "--help" || firstArg === "-h") {
-    printHelp();
+    await printHelp();
     process.exit(0);
   }
 
@@ -281,7 +383,8 @@ async function main(): Promise<void> {
 
   // Handle bundle install specially
   if (parsed.isBundle && parsed.subcommand === "install") {
-    const success = await handleBundleInstall();
+    const lockFilePath = parseBundleInstallLockPath(args);
+    const success = await handleBundleInstall(lockFilePath);
     process.exit(success ? 0 : 1);
   }
 
