@@ -8,6 +8,7 @@
  */
 
 import { $ } from "bun";
+import { performance } from "node:perf_hooks";
 
 import { bundleInstall } from "./bundle-install.ts";
 import { executeBrewCommandStreaming } from "./executor.ts";
@@ -25,6 +26,7 @@ import {
   writeLockFile,
 } from "./lock-manager.ts";
 import { parseCommand } from "./parser.ts";
+import { measurePerformance } from "./performance.ts";
 import type { PackageType } from "./types.ts";
 import { getAllTapsWithInfo, getPackageVersion } from "./version-resolver.ts";
 
@@ -51,6 +53,11 @@ export {
   writeLockFile,
 } from "./lock-manager.ts";
 // Export all public APIs
+export {
+  getPerformanceLogPath,
+  isPerformanceTracingEnabled,
+  measurePerformance,
+} from "./performance.ts";
 export { isModifyingCommand, parseCommand } from "./parser.ts";
 // Export types
 export type * from "./types.ts";
@@ -134,6 +141,16 @@ EXAMPLES:
 ENVIRONMENT VARIABLES:
   BREWLOCK     Path to the lock file (default: ~/brew.lock)
                Example: export BREWLOCK=/path/to/your/brew.lock
+  BREWLOCK_PERF
+               Set to 0 to disable performance spans (enabled by default)
+  BREWLOCK_PERF_LOG
+               Performance log path (default: ~/.brewlock/performance.ndjson)
+  BREWLOCK_TAP_INFO_BACKEND
+               Tap metadata backend: git (default) or brew
+  BREWLOCK_FORMULA_INFO_BACKEND
+               Formula metadata/version backend: local (default) or brew
+  BREWLOCK_CASK_INFO_BACKEND
+               Cask metadata/version backend: local (default) or brew
 
 FILES:
   brew.lock    Lock file in Brewfile format with version information`,
@@ -207,22 +224,23 @@ async function handleLock(): Promise<void> {
 /**
  * Check if installed packages match the lock file
  */
-async function handleCheck(): Promise<void> {
+async function handleCheck(): Promise<boolean> {
   console.log("Checking installed packages against brew.lock...");
 
   const result = await checkLockFile(getLockFilePath());
 
   if (result.matches) {
     console.log("\n✓ All installed packages match brew.lock");
-  } else {
-    console.log("\n✗ Version mismatches found:");
-    for (const mismatch of result.mismatches) {
-      console.log(`  ${mismatch.name}:`);
-      console.log(`    Expected: ${mismatch.expected}`);
-      console.log(`    Actual:   ${mismatch.actual ?? "not installed"}`);
-    }
-    process.exit(1);
+    return true;
   }
+
+  console.log("\n✗ Version mismatches found:");
+  for (const mismatch of result.mismatches) {
+    console.log(`  ${mismatch.name}:`);
+    console.log(`    Expected: ${mismatch.expected}`);
+    console.log(`    Actual:   ${mismatch.actual ?? "not installed"}`);
+  }
+  return false;
 }
 
 /**
@@ -233,67 +251,134 @@ async function updateLockFile(
   packages: string[],
   isCask: boolean
 ): Promise<void> {
-  const lockFilePath = getLockFilePath();
-  let lockFile = await readLockFile(lockFilePath);
   const type: PackageType = isCask ? "cask" : "brew";
+  const startedAt = performance.now();
+  const completionMessages: Array<(elapsed: string) => string> = [];
 
-  if (
-    command === "install" ||
-    command === "reinstall" ||
-    command === "upgrade"
-  ) {
-    // Add or update entries for installed packages
-    for (const pkg of packages) {
-      const version = await getPackageVersion(type, pkg);
-      if (version) {
-        if (type === "cask") {
-          lockFile = upsertCask(lockFile, pkg, { version });
-        } else {
-          lockFile = upsertBrew(lockFile, pkg, { version });
+  await measurePerformance(
+    "updateLockFile",
+    {
+      command,
+      isCask,
+      packageCount: packages.length,
+      type,
+    },
+    async (span) => {
+      const lockFilePath = getLockFilePath();
+      span.setAttribute("lockFilePath", lockFilePath);
+      let lockFile = await readLockFile(lockFilePath);
+
+      if (
+        command === "install" ||
+        command === "reinstall" ||
+        command === "upgrade"
+      ) {
+        let missingVersionCount = 0;
+        let updatedCount = 0;
+
+        // Add or update entries for installed packages
+        for (const pkg of packages) {
+          const version = await getPackageVersion(type, pkg);
+          if (version) {
+            if (type === "cask") {
+              lockFile = upsertCask(lockFile, pkg, { version });
+            } else {
+              lockFile = upsertBrew(lockFile, pkg, { version });
+            }
+            updatedCount += 1;
+            completionMessages.push(
+              (elapsed) =>
+                `brewlock: Updated ${type} "${pkg}" → ${version} (${elapsed})`
+            );
+          } else {
+            missingVersionCount += 1;
+          }
         }
-        console.log(`brewlock: Updated ${type} "${pkg}" → ${version}`);
+
+        // If upgrade with no packages, update all
+        if (command === "upgrade" && packages.length === 0) {
+          console.log("brewlock: Regenerating lock file after upgrade...");
+          span.setAttribute("regenerated", true);
+          lockFile = await generateLockFile();
+          completionMessages.push(
+            (elapsed) =>
+              `brewlock: Regenerated lock file after upgrade (${elapsed})`
+          );
+        }
+
+        span.setAttributes({
+          missingVersionCount,
+          updatedCount,
+        });
+      } else if (
+        command === "uninstall" ||
+        command === "remove" ||
+        command === "rm"
+      ) {
+        let removedCount = 0;
+
+        // Remove entries for uninstalled packages
+        for (const pkg of packages) {
+          if (type === "cask") {
+            lockFile = removeCask(lockFile, pkg);
+          } else {
+            lockFile = removeBrew(lockFile, pkg);
+          }
+          removedCount += 1;
+          completionMessages.push(
+            (elapsed) =>
+              `brewlock: Removed ${type} "${pkg}" from lock file (${elapsed})`
+          );
+        }
+
+        span.setAttribute("removedCount", removedCount);
+      } else if (command === "tap") {
+        let addedTapCount = 0;
+
+        // Add tap entries with URL and commit info
+        const tapInfos = await getAllTapsWithInfo();
+        span.setAttribute("tapInfoCount", tapInfos.length);
+        for (const tapName of packages) {
+          const tapInfo = tapInfos.find((t) => t.name === tapName);
+          lockFile = upsertTap(lockFile, tapName, {
+            url: tapInfo?.url,
+            commit: tapInfo?.commit,
+          });
+          addedTapCount += 1;
+          completionMessages.push(
+            (elapsed) => `brewlock: Added tap "${tapName}" (${elapsed})`
+          );
+        }
+
+        span.setAttribute("addedTapCount", addedTapCount);
+      } else if (command === "untap") {
+        let removedTapCount = 0;
+
+        // Remove tap entries
+        for (const tap of packages) {
+          lockFile = removeTap(lockFile, tap);
+          removedTapCount += 1;
+          completionMessages.push(
+            (elapsed) =>
+              `brewlock: Removed tap "${tap}" from lock file (${elapsed})`
+          );
+        }
+
+        span.setAttribute("removedTapCount", removedTapCount);
+      }
+
+      await writeLockFile(lockFile, lockFilePath);
+
+      const elapsed = formatDurationMs(performance.now() - startedAt);
+      for (const message of completionMessages) {
+        console.log(message(elapsed));
       }
     }
+  );
+}
 
-    // If upgrade with no packages, update all
-    if (command === "upgrade" && packages.length === 0) {
-      console.log("brewlock: Regenerating lock file after upgrade...");
-      lockFile = await generateLockFile();
-    }
-  } else if (
-    command === "uninstall" ||
-    command === "remove" ||
-    command === "rm"
-  ) {
-    // Remove entries for uninstalled packages
-    for (const pkg of packages) {
-      if (type === "cask") {
-        lockFile = removeCask(lockFile, pkg);
-      } else {
-        lockFile = removeBrew(lockFile, pkg);
-      }
-      console.log(`brewlock: Removed ${type} "${pkg}" from lock file`);
-    }
-  } else if (command === "tap") {
-    // Add tap entries with URL and commit info
-    const tapInfos = await getAllTapsWithInfo();
-    for (const tapName of packages) {
-      const tapInfo = tapInfos.find((t) => t.name === tapName);
-      lockFile = upsertTap(lockFile, tapName, {
-        url: tapInfo?.url,
-        commit: tapInfo?.commit,
-      });
-      console.log(`brewlock: Added tap "${tapName}"`);
-    }
-  } else if (command === "untap") {
-    // Remove tap entries
-    for (const tap of packages) {
-      lockFile = removeTap(lockFile, tap);
-      console.log(`brewlock: Removed tap "${tap}" from lock file`);
-    }
-  }
-
-  await writeLockFile(lockFile, lockFilePath);
+function formatDurationMs(durationMs: number): string {
+  return `${durationMs.toFixed(1)}ms`;
 }
 
 /** Parsed bundle install options */
@@ -406,29 +491,29 @@ async function handleBundleInstall(
 /**
  * Main CLI entry point
  */
-async function main(): Promise<void> {
+async function runCli(): Promise<number> {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
     await printHelp();
-    process.exit(0);
+    return 0;
   }
 
   // Handle brewlock-specific commands
   const firstArg = args[0];
   if (firstArg === "help" || firstArg === "--help" || firstArg === "-h") {
     await printHelp();
-    process.exit(0);
+    return 0;
   }
 
   if (firstArg === "lock") {
     await handleLock();
-    process.exit(0);
+    return 0;
   }
 
   if (firstArg === "check") {
-    await handleCheck();
-    process.exit(0);
+    const success = await handleCheck();
+    return success ? 0 : 1;
   }
 
   // Parse the brew command
@@ -438,7 +523,7 @@ async function main(): Promise<void> {
   if (parsed.isBundle && parsed.subcommand === "install") {
     const bundleOptions = parseBundleInstallArgs(args);
     const success = await handleBundleInstall(bundleOptions);
-    process.exit(success ? 0 : 1);
+    return success ? 0 : 1;
   }
 
   // Execute the brew command
@@ -449,7 +534,22 @@ async function main(): Promise<void> {
     await updateLockFile(parsed.command, parsed.packages, parsed.isCask);
   }
 
-  process.exit(result.exitCode);
+  return result.exitCode;
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const exitCode = await measurePerformance(
+    "cli.main",
+    {
+      argCount: args.length,
+      args: args.join(" "),
+      command: args[0] ?? "help",
+    },
+    () => runCli()
+  );
+
+  process.exit(exitCode);
 }
 
 // Run if executed directly

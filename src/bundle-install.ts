@@ -5,6 +5,7 @@
 
 import { executeBrewCommandStreaming } from "./executor.ts";
 import { readLockFile } from "./lock-manager.ts";
+import { measurePerformance } from "./performance.ts";
 import type {
   BrewEntry,
   BundleInstallOptions,
@@ -75,6 +76,21 @@ async function parallelLimit<T, R>(
  * Optimized with batch version checking and parallel installations
  */
 export async function bundleInstall(
+  options: BundleInstallOptions
+): Promise<boolean> {
+  return measurePerformance(
+    "bundleInstall",
+    {
+      concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
+      lockFilePath: options.lockFilePath,
+      strict: options.strict ?? false,
+      verbose: options.verbose ?? false,
+    },
+    () => bundleInstallInternal(options)
+  );
+}
+
+async function bundleInstallInternal(
   options: BundleInstallOptions
 ): Promise<boolean> {
   const {
