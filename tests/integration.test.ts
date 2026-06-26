@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LockFile } from "../src/types.ts";
@@ -46,11 +46,7 @@ describe("End-to-end workflow", () => {
 
   afterEach(async () => {
     resetMocking();
-    try {
-      await unlink(TEST_LOCK_FILE);
-    } catch {
-      // Ignore if file doesn't exist
-    }
+    await rm(TEST_LOCK_FILE, { force: true });
   });
 
   it("full roundtrip: generate, write, read, check", async () => {
@@ -203,11 +199,7 @@ describe("Lock file format compatibility", () => {
 
   afterEach(async () => {
     resetMocking();
-    try {
-      await unlink(TEST_LOCK_FILE);
-    } catch {
-      // Ignore
-    }
+    await rm(TEST_LOCK_FILE, { force: true });
   });
 
   it("generated lock file is parseable lock content", async () => {
@@ -277,11 +269,7 @@ describe("Error handling", () => {
 
   afterEach(async () => {
     resetMocking();
-    try {
-      await unlink(TEST_LOCK_FILE);
-    } catch {
-      // Ignore if file doesn't exist
-    }
+    await rm(TEST_LOCK_FILE, { force: true });
   });
 
   it("handles brew command failure gracefully", async () => {

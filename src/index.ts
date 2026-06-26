@@ -297,12 +297,10 @@ async function updateLockFile(
 
         // If upgrade with no packages, update all
         if (command === "upgrade" && packages.length === 0) {
-          console.log("brewlock: Regenerating lock file after upgrade...");
           span.setAttribute("regenerated", true);
           lockFile = await generateLockFile();
           completionMessages.push(
-            (elapsed) =>
-              `brewlock: Regenerated lock file after upgrade (${elapsed})`
+            (elapsed) => `Brewlock: Lockfile regenerated (${elapsed})`
           );
         }
 
