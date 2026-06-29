@@ -22,11 +22,11 @@
 ### Homebrew (recommended)
 
 ```bash
-brew tap shipworthyai/brewlock https://github.com/ShipWorthyAI/brewlock.git
+brew tap shipworthyai/tap
 brew install brewlock
 ```
 
-> **Note:** Currently only supports Apple Silicon Macs (arm64).
+> **Note:** The Homebrew formula provides Apple Silicon macOS and x86_64 Linux binaries.
 
 ### From Source
 
@@ -68,7 +68,7 @@ After adding the alias, restart your shell or run `source ~/.zshrc` (or equivale
 
 ```bash
 # Install brewlock
-brew tap shipworthyai/brewlock https://github.com/ShipWorthyAI/brewlock.git
+brew tap shipworthyai/tap
 brew install brewlock
 
 # Set up the alias (add to your ~/.zshrc)
@@ -201,8 +201,8 @@ by package type:
       "commit": "f6e5d4c3b2a1...",
       "official": true
     },
-    "shipworthyai/brewlock": {
-      "url": "https://github.com/ShipWorthyAI/brewlock.git",
+    "shipworthyai/tap": {
+      "url": "https://github.com/ShipWorthyAI/homebrew-tap.git",
       "commit": "abc123def456..."
     }
   },

@@ -122,50 +122,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  update-formula:
+  dispatch-formula-update:
     needs: [check-version, release]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.check-version.outputs.version }}
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Calculate SHA256 and update formula
+      - name: Dispatch tap formula update
         run: |
-          # Calculate SHA256 for each platform
-          SHA256_DARWIN_ARM64=$(sha256sum artifacts/brewlock-darwin-arm64/brewlock-darwin-arm64.tar.gz | cut -d' ' -f1)
-          SHA256_LINUX_X64=$(sha256sum artifacts/brewlock-linux-x64/brewlock-linux-x64.tar.gz | cut -d' ' -f1)
-          
-          echo "SHA256 Darwin ARM64: $SHA256_DARWIN_ARM64"
-          echo "SHA256 Linux x64: $SHA256_LINUX_X64"
-          echo "Version: $VERSION"
-          
-          # Update version in formula
-          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/brewlock.rb
-          
-          # Update download URLs with new version
-          sed -i "s|releases/download/v[^/]*/|releases/download/v${VERSION}/|g" Formula/brewlock.rb
-          
-          # Update SHA256 for each platform
-          # Darwin ARM64 - first sha256 after darwin-arm64.tar.gz
-          sed -i "/darwin-arm64.tar.gz/{n;s/sha256 \"[^\"]*\"/sha256 \"$SHA256_DARWIN_ARM64\"/}" Formula/brewlock.rb
-          
-          # Linux x64 - first sha256 after linux-x64.tar.gz
-          sed -i "/linux-x64.tar.gz/{n;s/sha256 \"[^\"]*\"/sha256 \"$SHA256_LINUX_X64\"/}" Formula/brewlock.rb
-          
-          cat Formula/brewlock.rb
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is required to dispatch ShipWorthyAI/homebrew-tap"
+            exit 1
+          fi
 
-      - name: Commit updated formula
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: update formula for v${{ env.VERSION }}"
-          file_pattern: Formula/brewlock.rb
-          branch: main
+          gh workflow run update-formula.yml \
+            --repo ShipWorthyAI/homebrew-tap \
+            --ref main \
+            --field formula=brewlock \
+            --field tag="v${VERSION}" \
+            --field repository=ShipWorthyAI/brewlock \
+            --field macos_artifact=brewlock-darwin-arm64.tar.gz \
+            --field linux_artifact=brewlock-linux-x64.tar.gz \
+            --field request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
