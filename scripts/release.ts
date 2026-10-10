@@ -10,7 +10,12 @@
 
 import { $ } from "bun";
 import { existsSync, unlinkSync } from "node:fs";
-import { arch, platform } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import { arch, platform, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+import { buildBinary } from "./build.ts";
+import { verifyBinary } from "./verify-binary.ts";
 
 function getPlatformTarget(): string {
   const os = platform();
@@ -31,24 +36,28 @@ async function build(): Promise<void> {
   console.log(`Building brewlock for ${target}...`);
 
   // Clean up previous builds
-  if (existsSync(binaryName)) {
-    unlinkSync(binaryName);
-  }
   if (existsSync(tarballName)) {
     unlinkSync(tarballName);
   }
 
   // Build the binary
-  await $`bun build src/index.ts --compile --outfile ${binaryName}`;
+  await buildBinary(binaryName);
   console.log(`✓ Built ${binaryName}`);
-
-  // Make executable
-  await $`chmod +x ${binaryName}`;
+  await verifyBinary(binaryName);
 
   if (createTarball) {
     // Create tarball
     await $`tar -czvf ${tarballName} ${binaryName}`;
     console.log(`✓ Created ${tarballName}`);
+
+    // Verify the artifact after the same extraction users receive.
+    const extracted = await mkdtemp(join(tmpdir(), "brewlock-release-"));
+    try {
+      await $`tar -xzf ${resolve(tarballName)} -C ${extracted}`;
+      await verifyBinary(join(extracted, binaryName));
+    } finally {
+      await rm(extracted, { force: true, recursive: true });
+    }
 
     // Show SHA256
     const result = await $`shasum -a 256 ${tarballName}`.text();
