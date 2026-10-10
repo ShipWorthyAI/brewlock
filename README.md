@@ -320,12 +320,20 @@ bun run typecheck
 # Build binary
 bun run build
 
+# Verify the compiled CLI with a stubbed Homebrew
+bun run test:binary
+
 # Run the CLI directly (without building)
 bun run src/index.ts --help
 
 # Build release tarball
 bun run build:release
 ```
+
+Both build commands apply and verify an ad hoc signature on macOS after
+compilation. CI checks the compiled CLI's help, command forwarding, output,
+exit status, and preservation of the lock file. Release builds run those checks
+before packaging and again after extracting the tarball.
 
 ## Project Structure
 
