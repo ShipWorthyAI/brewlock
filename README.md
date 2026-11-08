@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Deprecated:** brewlock is no longer maintained. Use [mise](https://mise.jdx.dev/bootstrap/packages/brew.html#homebrew-formulae-brew) to manage your Homebrew formulae and casks instead.
+
 <p align="center">
   <img src="./.github/brewlock.png" alt="brewlock" width="200" />
 </p>
